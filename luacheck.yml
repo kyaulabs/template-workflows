@@ -1,0 +1,20 @@
+name: CI
+
+on:
+  push:
+    branches: [ "master", "develop", "feature/**", "release/**" ]
+  pull_request:
+    branches: [ "master", "develop", "feature/**", "release/**" ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Luacheck
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+      - name: Run Luacheck
+        uses: lunarmodules/luacheck@v0
+        with:
+          args: --codes --ranges .

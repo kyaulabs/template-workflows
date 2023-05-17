@@ -1,0 +1,72 @@
+﻿name: "CI: Unity Build 🕹️"
+
+on:
+  workflow_dispatch: {}
+#on:
+#  push:
+#    branches: [ "release/**" ]
+#  workflow_dispatch:
+
+jobs:
+  build:
+    name: ${{ matrix.dir }} Build
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        dir:
+          - Server
+          - Client
+        targetPlatform:
+          - StandaloneWindows64
+          - StandaloneLinux64
+          - StandaloneOSX
+    defaults:
+      run:
+        working-directory: ${{ matrix.dir }}
+    steps:
+      # Checkout
+      - name: Checkout repository
+        uses: actions/checkout@v3
+        with:
+          lfs: true
+
+      # Cache
+      - uses: actions/cache@v2
+        with:
+          path: ${{ matrix.dir }}/Library
+          key: Library-${{ matrix.dir }}
+          restore-keys: Library-
+
+      # Client Builds
+      - name: Client Build for ${{ matrix.targetPlatform }}
+        if: matrix.dir == 'Client'
+        uses: game-ci/unity-builder@v2
+        env:
+          UNITY_LICENSE: ${{ secrets.UNITY_LICENSE }}
+          UNITY_EMAIL: ${{ secrets.UNITY_EMAIL }}
+          UNITY_PASSWORD: ${{ secrets.UNITY_PASSWORD }}
+        with:
+          projectPath: ${{ matrix.dir }}
+          targetPlatform: ${{ matrix.targetPlatform }}
+          versioning: Semantic
+
+      # Dedicated Server Builds
+      - name: Server Build for ${{ matrix.targetPlatform }}
+        if: matrix.dir == 'Server'
+        uses: game-ci/unity-builder@v2
+        env:
+          UNITY_LICENSE: ${{ secrets.UNITY_LICENSE }}
+          UNITY_EMAIL: ${{ secrets.UNITY_EMAIL }}
+          UNITY_PASSWORD: ${{ secrets.UNITY_PASSWORD }}
+        with:
+          customParameters: -standaloneBuildSubtarget Server
+          projectPath: ${{ matrix.dir }}
+          targetPlatform: ${{ matrix.targetPlatform }}
+          versioning: Semantic
+
+      # Output
+      - uses: actions/upload-artifact@v2
+        with:
+          name: Build
+          path: ${{ matrix.dir }}/build
