@@ -45,3 +45,17 @@ jobs:
         with:
           projectPath: ${{ matrix.dir }}
           githubToken: ${{ secrets.GITHUB_TOKEN }}
+
+      # Test Results
+      - uses: actions/upload-artifact@v2
+        if: always()
+        with:
+          name: Test results
+          path: ${{ steps.tests.outputs.artifactsPath }}
+
+      # Code Coverage
+      - uses: actions/upload-artifact@v2
+        if: always()
+        with:
+          name: Coverage results
+          path: ${{ steps.tests.outputs.coveragePath }}
