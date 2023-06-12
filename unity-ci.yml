@@ -1,0 +1,360 @@
+﻿name: "Unity CI 🕹️"
+
+on:
+  push:
+    branches: [ "develop", "feat/**" ]
+  workflow_dispatch:
+
+env:
+  UNITY_LICENSE: ${{ secrets.UNITY_LICENSE }}
+  projectPath: 'project'
+
+jobs:
+  # LICENSE CHECK
+  licenseCheck:
+    name: Check for Unity License 📄
+    runs-on: [ self-hosted, linux, x64 ]
+    steps:
+      - name: Fail - No Unity License ☠️
+        if: ${{ !startsWith(env.UNITY_LICENSE, '<') }}
+        run: exit 1
+
+  # TESTS
+  testRunner:
+    needs: licenseCheck
+    name: Tests (${{ matrix.testMode }}) 🧪
+    runs-on: [ self-hosted, linux, x64 ]
+    strategy:
+      fail-fast: false
+      matrix:
+        testMode:
+          - PlayMode
+          - EditMode
+    steps:
+      # checkout
+      - name: Checkout Repository
+        uses: actions/checkout@v3
+        with:
+          lfs: true
+      # cache
+      - name: Restore Library Cache
+        uses: actions/cache@v3
+        with:
+          path: ${{ env.projectPath }}/Library
+          key: Library-${{ env.projectPath }}
+          restore-keys: Library-
+      # tests
+      - name: Run ${{ matrix.testMode }} Tests
+        uses: game-ci/unity-test-runner@v2
+        id: testRunner
+        with:
+          projectPath: ${{ env.projectPath }}
+          testMode: ${{ matrix.testMode }}
+          artifactsPath: ${{ matrix.testMode }}-artifacts
+          githubToken: ${{ secrets.GITHUB_TOKEN }}
+          gitPrivateToken: ${{ secrets.GIT_PRIVATE_TOKEN }}
+          checkName: ${{ matrix.testMode }} Test Results
+      # test results
+      - name: Test Results - ${{ matrix.testMode }}
+        uses: actions/upload-artifact@v3
+        if: always()
+        with:
+          name: Test Results (${{ matrix.testMode }})
+          path: ${{ steps.testRunner.outputs.artifactsPath }}
+      # code coverage
+      - name: Coverage Report - ${{ matrix.testMode }}
+        uses: actions/upload-artifact@v3
+        if: always()
+        with:
+          name: Coverage Results (${{ matrix.testMode }})
+          path: ${{ steps.testRunner.outputs.coveragePath }}
+
+  # TAG CHECK
+  tagCheck:
+    needs: testRunner
+    name: Is Commit a Release 🔖
+    runs-on: [ self-hosted, linux, x64 ]
+    outputs: 
+      release: ${{ steps.check.outputs.release }}
+      tagname: ${{ steps.check.outputs.tagname }}
+    steps:
+      - name: Check Repository
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+      - name: Setting Release Variable
+        id: check
+        run: |
+          githash=$(git rev-parse --short "$GITHUB_SHA")
+          tagname=$(git tag --contains $githash)
+          if [ -n "$tagname" ]; then
+            printf "githash: %s\nrelease: true\ntagname: %s\n" "$githash" "$tagname"
+            echo "release=true" >> "$GITHUB_OUTPUT"
+            echo "tagname=$tagname" >> "$GITHUB_OUTPUT"
+          else
+            printf "githash: %s\nrelease: false\ntagname: %s\n" "$githash" "$tagname"
+            echo "release=false" >> "$GITHUB_OUTPUT"
+            echo "tagname=$tagname" >> "$GITHUB_OUTPUT"
+          fi
+
+  # CODECOV/TEST RESULTS => TESTS REPO
+  testResults:
+    needs: testRunner
+    name: Push Test Results 🚚
+    runs-on: [ self-hosted, linux, x64 ]
+    strategy:
+      fail-fast: false
+    steps:
+      # checkout
+      - name: Checkout Repository
+        uses: actions/checkout@v3
+      # download test artifacts
+      - name: Download All Artifacts
+        uses: actions/download-artifact@v3
+        with:
+          path: build/artifacts
+      # get current date
+      - name: Get Current Date
+        id: date
+        run: echo "date=$(date +'%Y%m%d')" >> "$GITHUB_OUTPUT"
+      # get curent git hash
+      - name: Get Current Date
+        id: hash
+        run: echo "githash=$(git rev-parse --short "$GITHUB_SHA")" >> "$GITHUB_OUTPUT"
+      # push to tests repo
+      - name: Push to Tests Repository
+        uses: cpina/github-action-push-to-another-repository@main
+        env:
+          API_TOKEN_GITHUB: ${{ secrets.ABC_REPO_TOKEN }}
+        with:
+          source-directory: 'build/artifacts/'
+          destination-github-username: 'kyaulabs'
+          destination-repository-name: 'abc-tests'
+          user-name: 'kyaulabs-bot'
+          user-email: actions@kyaulabs.com
+          create-target-branch-if-needed: true
+          target-branch: main
+          target-directory: 'tests-${{ steps.date.outputs.date }}-${{ steps.hash.outputs.githash }}'
+
+  # BUILD: WINDOWS
+  buildWindows:
+    needs: tagCheck
+    if: ${{ needs.tagCheck.outputs.release == 'true' }}
+    name: Build Windows Client 💾
+    runs-on: [ self-hosted, linux, x64 ]
+    strategy:
+      fail-fast: false
+      matrix:
+        targetPlatform:
+          - StandaloneWindows64
+    steps:
+      # checkout
+      - name: Check Repository
+        uses: actions/checkout@v3
+        with:
+          lfs: true
+      # cache
+      - name: Restore Library Cache
+        uses: actions/cache@v3
+        with:
+          path: ${{ env.projectPath }}/Library
+          key: Library-${{ env.projectPath }}-Win64
+          restore-keys: Library-
+      # build
+      - name: Build Win64 Client
+        uses: game-ci/unity-builder@v2
+        with:
+          gitPrivateToken: ${{ secrets.GIT_PRIVATE_TOKEN }}
+          projectPath: ${{ env.projectPath }}
+          targetPlatform: ${{ matrix.targetPlatform }}
+          versioning: Semantic
+      # client download
+      - name: Windows Client
+        uses: actions/upload-artifact@v3
+        with:
+          name: Client-Win64
+          path: build/StandaloneWindows64
+
+  # BUILD: LINUX
+  buildLinux:
+    needs: tagCheck
+    if: ${{ needs.tagCheck.outputs.release == 'true' }}
+    name: Build Linux Client 💾
+    runs-on: [ self-hosted, linux, x64 ]
+    strategy:
+      fail-fast: false
+      matrix:
+        targetPlatform:
+          - StandaloneLinux64
+    steps:
+      # checkout
+      - name: Check Repository
+        uses: actions/checkout@v3
+        with:
+          lfs: true
+      # cache
+      - name: Restore Library Cache
+        uses: actions/cache@v3
+        with:
+          path: ${{ env.projectPath }}/Library
+          key: Library-${{ env.projectPath }}-Linux64
+          restore-keys: Library-
+      # build
+      - name: Build Linux64 Client
+        uses: game-ci/unity-builder@v2
+        with:
+          gitPrivateToken: ${{ secrets.GIT_PRIVATE_TOKEN }}
+          projectPath: ${{ env.projectPath }}
+          targetPlatform: ${{ matrix.targetPlatform }}
+          versioning: Semantic
+      # client download
+      - name: Linux Client
+        uses: actions/upload-artifact@v3
+        with:
+          name: Client-Linux64
+          path: build/StandaloneLinux64
+
+  # BUILD: MACOSX
+  buildOSX:
+    needs: tagCheck
+    if: ${{ needs.tagCheck.outputs.release == 'true' }}
+    name: Build MacOSX Client 💾
+    runs-on: [ self-hosted, linux, x64 ]
+    strategy:
+      fail-fast: false
+      matrix:
+        targetPlatform:
+          - StandaloneOSX
+    steps:
+      # checkout
+      - name: Check Repository
+        uses: actions/checkout@v3
+        with:
+          lfs: true
+      # cache
+      - name: Restore Library Cache
+        uses: actions/cache@v3
+        with:
+          path: ${{ env.projectPath }}/Library
+          key: Library-${{ env.projectPath }}-MacOSX
+          restore-keys: Library-
+      # build
+      - name: Build MacOSX Client
+        uses: game-ci/unity-builder@v2
+        with:
+          gitPrivateToken: ${{ secrets.GIT_PRIVATE_TOKEN }}
+          projectPath: ${{ env.projectPath }}
+          targetPlatform: ${{ matrix.targetPlatform }}
+          versioning: Semantic
+      # client download
+      - name: Mac Client
+        uses: actions/upload-artifact@v3
+        with:
+          name: Client-MacOSX
+          path: build/StandaloneOSX
+
+  # BUILD: WEBGL
+  buildWebGL:
+    if: false
+    needs: tagCheck
+    #if: ${{ needs.tagCheck.outputs.release == 'true' }}
+    name: Build WebGL Client 💾
+    runs-on: [ self-hosted, linux, x64 ]
+    strategy:
+      fail-fast: false
+      matrix:
+        targetPlatform:
+          - WebGL
+    steps:
+      # checkout
+      - name: Check Repository
+        uses: actions/checkout@v3
+        with:
+          lfs: true
+      # cache
+      - name: Restore Library Cache
+        uses: actions/cache@v3
+        with:
+          path: ${{ env.projectPath }}/Library
+          key: Library-${{ env.projectPath }}-WebGL
+          restore-keys: Library-
+      # build
+      - name: Build WebGL Client
+        uses: game-ci/unity-builder@v2
+        with:
+          gitPrivateToken: ${{ secrets.GIT_PRIVATE_TOKEN }}
+          projectPath: ${{ env.projectPath }}
+          targetPlatform: ${{ matrix.targetPlatform }}
+          versioning: Semantic
+      # client download
+      - name: WebGL Client
+        uses: actions/upload-artifact@v3
+        with:
+          name: Client-WebGL
+          path: build/WebGL
+
+  # DEPLOY PAGES
+  deployPages:
+    needs: buildWebGL
+    name: Deploy to GitHub Pages 🚀
+    runs-on: [ self-hosted, linux, x64 ]
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v3
+      - name: Download WebGL Artifacts
+        uses: actions/download-artifact@v3
+        with:
+          name: build-WebGL
+          path: build
+      - name: Display File structure
+        run: ls -R
+        working-directory: build/WebGL
+      - name: Deploy
+        uses: JamesIves/github-pages-deploy-action@v4
+        with:
+          branch: gh-pages
+          folder: build/WebGL
+
+  # RELEASE
+  publicRelease:
+    needs: [tagCheck, buildWindows, buildLinux, buildOSX]
+    name: Release 🔖
+    runs-on: [ self-hosted, linux, x64 ]
+    strategy:
+      fail-fast: false
+    env:
+      tagname: ${{ needs.tagCheck.outputs.tagname }}
+    steps:
+      # checkout
+      - name: Checkout Repository
+        uses: actions/checkout@v3
+      # download build artifacts
+      - name: Download All Artifacts
+        uses: actions/download-artifact@v3
+        with:
+          path: build/artifacts
+      # compress clients
+      - name: List Directory
+        run: ls -FalG build/artifacts/Client-Win64/
+      - name: Compress Windows Client
+        run: 7z a -tzip -y -mx=9 build/${{ env.projectPath }}-client-win64-${{ needs.tagCheck.outputs.tagname }}.zip build/artifacts/Client-Win64
+      - name: Generate Windows Client SHA512
+        run: sha512sum build/${{ env.projectPath }}-client-win64-${{ needs.tagCheck.outputs.tagname }}.zip > build/${{ env.projectPath }}-client-win64-${{ needs.tagCheck.outputs.tagname }}.zip.sha512
+      - name: Compress Linux Client
+        run: tar -I 'zstd' -cvf build/${{ env.projectPath }}-client-linux64-${{ needs.tagCheck.outputs.tagname }}.tar.zst build/artifacts/Client-Linux64
+      - name: Generate Linux Client SHA512
+        run: sha512sum build/${{ env.projectPath }}-client-linux64-${{ needs.tagCheck.outputs.tagname }}.tar.zst > build/${{ env.projectPath }}-client-linux64-${{ needs.tagCheck.outputs.tagname }}.tar.zst.sha512
+      - name: Compress MacOSX Client
+        run: 7z a -tzip -y -mx=9 build/${{ env.projectPath }}-client-macosx-${{ needs.tagCheck.outputs.tagname }}.zip build/artifacts/Client-MacOSX
+      - name: Generate MacOSX Client SHA512
+        run: sha512sum build/${{ env.projectPath }}-client-macosx-${{ needs.tagCheck.outputs.tagname }}.zip > build/${{ env.projectPath }}-client-macosx-${{ needs.tagCheck.outputs.tagname }}.zip.sha512
+      # generate changelog
+      - name: Generate UPDATE.md
+        run: git-cliff --current > build/UPDATE.md
+      # new release
+      - uses: ncipollo/release-action@v1
+        with:
+          artifacts: build/${{ env.projectPath }}-client-*-${{ needs.tagCheck.outputs.tagname }}.*
+          bodyFile: build/UPDATE.md
+          tag: ${{ needs.tagCheck.outputs.tagname }}
+          token: ${{ secrets.BOT_TOKEN }}

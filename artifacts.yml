@@ -1,0 +1,32 @@
+﻿# https://github.com/actions/upload-artifact/issues/290#issuecomment-1374207010
+name: Clean Artifacts 🗑️
+
+on:
+  workflow_run:
+    branches: [ "develop", "feat/**" ]
+    workflows: [ "Unity CI 🕹️" ]
+    types:
+      - completed
+
+jobs:
+  on-success:
+    runs-on: [ self-hosted, linux, x64 ]
+    #if: github.event.workflow_run.head_branch == 'main' # feel free to take this out if you don't need it
+    env:
+      GH_TOKEN: ${{ secrets.GH_TOKEN }}
+    steps:
+      - id: get-id
+        run: | # grab the id of the artifact we just created
+          echo "ARTIFACT_ID=($(gh api -H 'Accept: application/vnd.github+json'   ${{ github.event.workflow_run.artifacts_url }} --jq .artifacts[].id | xargs))" >> "$GITHUB_ENV"
+      - run: |
+          echo "artifact id(s): ${{ env.ARTIFACT_ID }}"
+          echo "run url: ${{ github.event.workflow_run.artifacts_url }}"
+      - id: delete-artifact
+        run: | # https://docs.github.com/en/rest/actions/artifacts?apiVersion=2022-11-28#delete-an-artifact
+          artifacts=${{ env.ARTIFACT_ID }}
+          for artifact in "${artifacts[@]}"; do gh api --method DELETE -H 'Accept: application/vnd.github+json' /repos/${{ github.repository }}/actions/artifacts/$artifact; done
+  on-failure:
+    runs-on: [ self-hosted, linux, x64 ]
+    if: ${{ github.event.workflow_run.conclusion == 'failure' }}
+    steps:
+      - run: echo 'The triggering workflow failed'
